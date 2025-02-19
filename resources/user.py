@@ -2,7 +2,7 @@ from flask.views import MethodView
 from flask_smorest import Blueprint, abort
 from sqlalchemy.exc import SQLAlchemyError
 from passlib.hash import pbkdf2_sha256 as sha256
-from flask_jwt_extended import create_access_token, jwt_required, get_jwt
+from flask_jwt_extended import create_access_token, create_refresh_token,jwt_required, get_jwt, get_jwt_identity
 
 from blocklist import BLOCKLIST
 
@@ -38,9 +38,21 @@ class UserLogin(MethodView):
         user = UserModel.query.filter_by(username=user_data["username"]).first()
         
         if user and sha256.verify(user_data["password"], user.password):
-            access_token = create_access_token(identity=str(user.id))
-            return {"access_token": access_token}
+            access_token = create_access_token(identity=str(user.id), fresh=True)
+            refresh_token = create_refresh_token(identity=str(user.id))
+            return {"access_token": access_token, "refresh_token": refresh_token}
         abort(401, message="Invalid username or password")
+
+@blp.route("/refresh")
+class TokenRefresh(MethodView):
+    @blp.response(200)
+    @jwt_required(refresh=True)
+    def post(self):
+        current_user = get_jwt_identity()
+        access_token = create_access_token(identity=current_user, fresh=False)
+        jti = get_jwt()["jti"]
+        BLOCKLIST.add(jti)
+        return {"access_token": access_token}
 
 @blp.route("/logout")
 class UserLogout(MethodView):
@@ -60,6 +72,7 @@ class User(MethodView):
         return user
 
     @blp.response(200, UserSchema)
+    @jwt_required(fresh=True)
     def delete(self, user_id):
         user = UserModel.query.get_or_404(user_id)
         db.session.delete(user)
